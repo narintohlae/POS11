@@ -3780,128 +3780,137 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 <script>
-(function() {
-    // รอให้ POS_APP โหลดเสร็จก่อน
-    const app = window.POS_APP || {};
-    
-    // 1. ฟังก์ชันสำหรับบันทึกสถานะปัจจุบันลง LocalStorage
-    app.saveStateToStorage = function() {
-        if (!this.state || !this.state.tabs) return;
-        try {
-            // แปลง Map เป็น Array เพื่อให้บันทึกเป็น JSON ได้
-            const tabsArray = Array.from(this.state.tabs.entries());
-            const backupData = {
-                tabs: tabsArray,
-                activeTabId: this.state.activeTabId,
-                timestamp: Date.now()
-            };
-            localStorage.setItem('pos_cart_backup', JSON.stringify(backupData));
-        } catch (e) {
-            console.error("Auto-save failed:", e);
-        }
-    };
-
-    // 2. ฟังก์ชันสำหรับกู้คืนข้อมูลเมื่อโหลดหน้าใหม่
-    app.restoreStateFromStorage = function() {
-        try {
-            const raw = localStorage.getItem('pos_cart_backup');
-            if (!raw) return false;
-
-            const data = JSON.parse(raw);
-            
-            // ตรวจสอบว่าข้อมูลเก่าเกินไปหรือไม่ (เช่น เกิน 24 ชม. ให้ล้างทิ้ง)
-            const oneDay = 24 * 60 * 60 * 1000;
-            if (Date.now() - data.timestamp > oneDay) {
-                localStorage.removeItem('pos_cart_backup');
-                return false;
-            }
-
-            if (data.tabs && Array.isArray(data.tabs) && data.tabs.length > 0) {
-                // กู้คืน Map จาก Array
-                this.state.tabs = new Map(data.tabs);
-                this.state.activeTabId = data.activeTabId;
-                
-                // เรนเดอร์หน้าจอใหม่
-                this.renderTabs();
-                this.updateCartDisplay();
-                
-                // แจ้งเตือนเล็กน้อยที่มุมจอว่ากู้คืนแล้ว (Optional)
-                console.log("Restored cart from backup.");
-                return true;
-            }
-        } catch (e) {
-            console.error("Restore failed:", e);
-            localStorage.removeItem('pos_cart_backup');
-        }
-        return false;
-    };
-
-    // 3. Override ฟังก์ชันเดิมเพื่อแทรกคำสั่ง Save
-    const originalUpdateCart = app.updateCartDisplay;
-    app.updateCartDisplay = function() {
-        // เรียกฟังก์ชันเดิมก่อน
-        originalUpdateCart.apply(this, arguments);
-        // แล้วสั่งบันทึก
-        this.saveStateToStorage();
-    };
-
-    const originalSwitchTab = app.switchTab;
-    app.switchTab = function(tabId) {
-        originalSwitchTab.call(this, tabId);
-        this.saveStateToStorage();
-    };
-    
-    // ดักจับการปิดแท็บ (Close Tab) หรือล้างข้อมูลเมื่อขายเสร็จ
-    const originalCloseTab = app.closeTab;
-    app.closeTab = function(tabId, confirm) {
-        // เรียกตัวเดิม
-        originalCloseTab.call(this, tabId, confirm);
-        // บันทึกสถานะใหม่ (ซึ่งแท็บถูกลบไปแล้ว)
-        this.saveStateToStorage();
-    };
-
-    // 4. แก้ไขฟังก์ชัน clearDataOnStart เพื่อให้กู้ข้อมูลแทนที่จะล้างทิ้ง
-    app.clearDataOnStart = function() {
-        // ลองกู้คืนข้อมูลก่อน
-        const restored = this.restoreStateFromStorage();
-        
-        if (restored) {
-            // ถ้ากู้ได้ ไม่ต้องทำอะไรเพิ่ม แค่เคลียร์ประวัติการขายใน RAM (salesHistory) พอ
-            this.state.salesHistory = [];
-            if (this.state.unsubscribeSalesHistory) this.state.unsubscribeSalesHistory();
-            this.updateHistoryDisplay();
-        } else {
-            // ถ้ากู้ไม่ได้ ให้ทำงานแบบเดิม (Reset ทุกอย่าง)
-            this.state.salesHistory = [];
-            this.state.tabs = new Map();
-            this.state.activeTabId = null;
-            if (this.state.unsubscribeSalesHistory) this.state.unsubscribeSalesHistory();
-            this.updateHistoryDisplay();
-            this.renderTabs();
-            const cartItemsEl = document.getElementById('cart-items');
-            if (cartItemsEl) cartItemsEl.innerHTML = '';
-            // updateCartDisplay จะถูกเรียกใน start() อยู่แล้ว
-        }
-    };
-
-    // 5. ป้องกันการกด Refresh โดยไม่ได้ตั้งใจ (Browser Warning)
-    window.addEventListener('beforeunload', function (e) {
+document.addEventListener("DOMContentLoaded", function() {
+    // ใช้ setTimeout เพื่อรอให้ตัวแปรหลัก (POS_APP) ถูกประกาศให้เสร็จสมบูรณ์ก่อน 100%
+    setTimeout(function() {
         const app = window.POS_APP;
-        if (!app || !app.state || !app.state.tabs) return;
+        if (!app) {
+            console.error("POS_APP not found, Auto-save patch failed.");
+            return;
+        }
+
+        console.log("Auto-save Patch V2: Activated");
+
+        // 1. ฟังก์ชันบันทึกข้อมูลลง LocalStorage
+        app.saveStateToStorage = function() {
+            if (!this.state || !this.state.tabs) return;
+            try {
+                const tabsArray = Array.from(this.state.tabs.entries());
+                const backupData = {
+                    tabs: tabsArray,
+                    activeTabId: this.state.activeTabId,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem('pos_cart_backup', JSON.stringify(backupData));
+            } catch (e) {
+                console.error("Auto-save error:", e);
+            }
+        };
+
+        // 2. ฟังก์ชันกู้คืนข้อมูล
+        app.restoreStateFromStorage = function() {
+            try {
+                const raw = localStorage.getItem('pos_cart_backup');
+                if (!raw) return false;
+
+                const data = JSON.parse(raw);
+                // ถ้าข้อมูลเก่าเกิน 24 ชม. ให้ลบทิ้ง
+                if (Date.now() - data.timestamp > (24 * 60 * 60 * 1000)) {
+                    localStorage.removeItem('pos_cart_backup');
+                    return false;
+                }
+
+                if (data.tabs && Array.isArray(data.tabs) && data.tabs.length > 0) {
+                    this.state.tabs = new Map(data.tabs);
+                    this.state.activeTabId = data.activeTabId;
+                    
+                    // เรนเดอร์หน้าจอใหม่ทันที
+                    this.renderTabs();
+                    this.updateCartDisplay();
+                    
+                    // ถ้ามีแถบเลื่อน (Tabs) ให้เลื่อนไปหา Tab ที่ Active
+                    setTimeout(() => {
+                         const activeBtn = document.querySelector('.tab-button.active');
+                         if(activeBtn) activeBtn.scrollIntoView({behavior: "smooth", inline: "center"});
+                    }, 100);
+
+                    console.log("Restored cart data successfully.");
+                    return true;
+                }
+            } catch (e) {
+                console.error("Restore error:", e);
+            }
+            return false;
+        };
+
+        // 3. ดักจับฟังก์ชันต่างๆ เพื่อสั่งบันทึกอัตโนมัติเมื่อมีการเปลี่ยนแปลง
+        const originalUpdateCart = app.updateCartDisplay;
+        app.updateCartDisplay = function() {
+            originalUpdateCart.apply(this, arguments);
+            this.saveStateToStorage();
+        };
+
+        const originalSwitchTab = app.switchTab;
+        app.switchTab = function(tabId) {
+            originalSwitchTab.call(this, tabId);
+            this.saveStateToStorage();
+        };
+
+        const originalCloseTab = app.closeTab;
+        app.closeTab = function(tabId, confirm) {
+            originalCloseTab.call(this, tabId, confirm);
+            this.saveStateToStorage();
+        };
+
+        const originalLogout = app.logout;
+        app.logout = function() {
+            // ถ้า Logout ให้ล้างข้อมูลสำรองด้วย เพื่อความปลอดภัย
+            localStorage.removeItem('pos_cart_backup');
+            originalLogout.call(this);
+        };
+
+        // 4. *** สำคัญที่สุด *** แก้ไขฟังก์ชันเริ่มระบบ (clearDataOnStart)
+        // เพื่อให้มัน "กู้คืน" แทนที่จะ "ล้าง" ข้อมูลทิ้ง
+        app.clearDataOnStart = function() {
+            console.log("Checking for backup data...");
+            const restored = this.restoreStateFromStorage();
+            
+            if (restored) {
+                // กู้คืนสำเร็จ: ให้ล้างแค่ตัวแปรอื่นที่ไม่จำเป็น แต่เก็บ Tabs/Cart ไว้
+                this.state.salesHistory = [];
+                if (this.state.unsubscribeSalesHistory) this.state.unsubscribeSalesHistory();
+                this.updateHistoryDisplay();
+            } else {
+                // กู้คืนไม่สำเร็จ (ไม่มีข้อมูลเก่า): ให้ทำงานแบบเดิมคือล้างทุกอย่าง
+                this.state.salesHistory = [];
+                this.state.tabs = new Map();
+                this.state.activeTabId = null;
+                if (this.state.unsubscribeSalesHistory) this.state.unsubscribeSalesHistory();
+                this.updateHistoryDisplay();
+                this.renderTabs();
+                const cartItemsEl = document.getElementById('cart-items');
+                if (cartItemsEl) cartItemsEl.innerHTML = '';
+            }
+        };
         
-        // เช็คว่ามีของในตะกร้าสักบิลไหม
-        let hasItems = false;
-        app.state.tabs.forEach(tab => {
-            if (tab.cart && tab.cart.length > 0) hasItems = true;
+        // สั่งให้ลองกู้คืนทันทีอีกครั้ง (เผื่อฟังก์ชัน start รันไปก่อนหน้านี้แล้ว)
+        app.clearDataOnStart();
+
+        // 5. ป้องกันการปิดหน้าเว็บโดยไม่ตั้งใจ
+        window.addEventListener('beforeunload', function (e) {
+            if (!app.state || !app.state.tabs) return;
+            let hasItems = false;
+            app.state.tabs.forEach(tab => {
+                if (tab.cart && tab.cart.length > 0) hasItems = true;
+            });
+            if (hasItems) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
         });
 
-        if (hasItems) {
-            e.preventDefault();
-            e.returnValue = ''; // Chrome requires returnValue to be set
-        }
-    });
-
-})();
+    }, 500); // หน่วงเวลา 0.5 วินาที เพื่อความชัวร์
+});
 </script>
 
 <!-- End Patch -->
